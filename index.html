@@ -1,0 +1,389 @@
+<!DOCTYPE html>
+<html>
+<!--
+  [Engineering ID (EgID) Document]
+
+  * EgID E100: saveRoute() - 경로를 쿠키에 저장하는 기능.
+  * EgID E101: loadRoute() - 쿠키에서 경로를 불러와 지도에 표시하는 기능.
+  * EgID E102: mapClickHandler() - 지도 클릭 이벤트를 처리하여 폴리라인 생성/추가.
+  * EgID E103: displayCircleDot() - 마우스 클릭 지점에 표시되는 점(커스텀 오버레이)을 만드는 기능.
+  * EgID E104: showDistance() - 현재까지의 거리정보를 지도에 표시.
+  * EgID E105: updateRouteInfo() - 지도 하단에 총거리/도보/자전거/바이크 시간 정보 출력.
+  * EgID E106: deleteClickLine() - 기존 폴리라인(경로) 삭제.
+  * EgID E107: deleteDistnce() - 거리 표시용 커스텀 오버레이 삭제.
+  * EgID E108: deleteCircleDot() - 각 클릭 지점에 표시된 오버레이(점) 모두 제거.
+  * EgID E109: formatTime() - 분(minutes)을 '시, 분' 형태로 변환하여 반환.
+  * EgID E110: getTimeHTML() - 총거리, 도보, 자전거, 바이크 예상 시간을 커스텀오버레이 HTML로 생성.
+-->
+<head>
+    <meta charset="utf-8">
+    <title>선의 거리 계산하기</title>
+    <style>
+.dot {overflow:hidden;float:left;width:12px;height:12px;background: url('https://t1.daumcdn.net/localimg/localimages/07/mapapidoc/mini_circle.png');}    
+.dotOverlay {position:relative;bottom:10px;border-radius:6px;border: 1px solid #ccc;border-bottom:2px solid #ddd;float:left;font-size:12px;padding:5px;background:#fff;}
+.dotOverlay:nth-of-type(n) {border:0; box-shadow:0px 1px 2px #888;}    
+.number {font-weight:bold;color:#ee6152;}
+.dotOverlay:after {content:'';position:absolute;margin-left:-6px;left:50%;bottom:-8px;width:11px;height:8px;background:url('https://t1.daumcdn.net/localimg/localimages/07/mapapidoc/vertex_white_small.png')}
+.distanceInfo {position:relative;top:5px;left:5px;list-style:none;margin:0;}
+.distanceInfo .label {display:inline-block;width:50px;}
+.distanceInfo:after {content:none;}
+
+/* 추가: 쿠키 데이터(좌표) 표시 영역 스타일 */
+#cookieOutput {
+    margin-top: 10px;
+    padding: 10px;
+    background: #f9f9f9;
+    border: 1px solid #ccc;
+    font-family: monospace;
+    white-space: pre;
+}
+
+/* 추가: 지도 하단에 총거리, 도보/자전거/바이크 시간 표시 영역 스타일 */
+#routeInfo {
+    margin-top: 10px;
+    padding: 10px;
+    border: 1px solid #ccc;
+    background: #f1f1f1;
+    line-height: 1.6;
+}
+    </style>
+</head>
+<body>
+<div id="map" style="width:100%;height:350px;"></div>  
+<p>
+    <em>지도를 마우스로 클릭하면 선 그리기가 시작되고<br>오른쪽 마우스를 클릭하면 선 그리기가 종료됩니다</em>
+</p>
+
+<!-- 경로 저장/불러오기 버튼 -->
+<p>
+    <button type="button" onclick="saveRoute()">경로 저장</button>
+    <button type="button" onclick="loadRoute()">경로 불러오기</button>
+</p>
+
+<!-- (EgID E105) 경로 정보를 표시할 영역 -->
+    경로 info
+<div id="routeInfo"></div>
+<br>
+    경로 data
+<!-- 쿠키 데이터를 표시할 영역 -->
+<div id="cookieOutput"></div>
+
+<script type="text/javascript" src="//dapi.kakao.com/v2/maps/sdk.js?appkey=5ebb529a711c90b316ad239d73d6f02b"></script>
+<script>
+// (EgID E102) mapClickHandler: 지도 클릭시 선을 그리고 업데이트하는 역할.
+var mapContainer = document.getElementById('map'), // 지도를 표시할 div  
+    mapOption = { 
+        center: new kakao.maps.LatLng(33.450701, 126.570667), // 지도의 중심좌표
+        level: 3 // 지도의 확대 레벨
+    };
+
+var map = new kakao.maps.Map(mapContainer, mapOption);
+
+var drawingFlag = false; 
+var moveLine;
+var clickLine;
+var distanceOverlay;
+var dots = {};
+
+// 쿠키 로드 후 클릭 이벤트를 막기 위한 플래그
+var routeLoaded = false;
+
+function mapClickHandler(mouseEvent) {
+    // 이미 쿠키에서 경로가 불러와졌다면, 클릭 이벤트 무시
+    if (routeLoaded) {
+      return;
+    }
+
+    var clickPosition = mouseEvent.latLng;
+
+    if (!drawingFlag) {
+        drawingFlag = true;
+        deleteClickLine();
+        deleteDistnce();
+        deleteCircleDot();
+        clickLine = new kakao.maps.Polyline({
+            map: map,
+            path: [clickPosition],
+            strokeWeight: 3,
+            strokeColor: '#db4040',
+            strokeOpacity: 1,
+            strokeStyle: 'solid'
+        });
+        moveLine = new kakao.maps.Polyline({
+            strokeWeight: 3,
+            strokeColor: '#db4040',
+            strokeOpacity: 0.5,
+            strokeStyle: 'solid'    
+        });
+        displayCircleDot(clickPosition, 0);
+    } else {
+        var path = clickLine.getPath();
+        path.push(clickPosition);
+        clickLine.setPath(path);
+        var distance = Math.round(clickLine.getLength());
+        displayCircleDot(clickPosition, distance);
+    }
+}
+
+// (EgID E102) 지도에 클릭 이벤트 등록
+kakao.maps.event.addListener(map, 'click', mapClickHandler);
+
+kakao.maps.event.addListener(map, 'mousemove', function (mouseEvent) {
+    if (drawingFlag && !routeLoaded){
+        var mousePosition = mouseEvent.latLng; 
+        var path = clickLine.getPath();
+        var movepath = [path[path.length-1], mousePosition];
+        moveLine.setPath(movepath);    
+        moveLine.setMap(map);
+        var distance = Math.round(clickLine.getLength() + moveLine.getLength());
+        var content = '<div class="dotOverlay distanceInfo">총거리 <span class="number">' + distance + '</span>m</div>';
+        showDistance(content, mousePosition);
+    }
+});                 
+
+kakao.maps.event.addListener(map, 'rightclick', function (mouseEvent) {
+    if (drawingFlag && !routeLoaded) {
+        moveLine.setMap(null);
+        moveLine = null;  
+        var path = clickLine.getPath();
+        if (path.length > 1) {
+            if (dots[dots.length-1].distance) {
+                dots[dots.length-1].distance.setMap(null);
+                dots[dots.length-1].distance = null;
+            }
+            var distance = Math.round(clickLine.getLength());
+            var content = getTimeHTML(distance);
+            showDistance(content, path[path.length-1]);  
+            // (EgID E105) 지도 하단에 총거리/시간 정보 출력
+            updateRouteInfo(distance);
+        } else {
+            deleteClickLine();
+            deleteCircleDot(); 
+            deleteDistnce();
+        }
+        drawingFlag = false;          
+    }
+});
+
+// (EgID E106) 기존 폴리라인(경로) 삭제
+function deleteClickLine() {
+    if (clickLine) {
+        clickLine.setMap(null);
+        clickLine = null;
+    }
+}
+
+// (EgID E104) 현재까지의 거리정보를 지도에 표시하는 커스텀오버레이
+function showDistance(content, position) {
+    if (distanceOverlay) {
+        distanceOverlay.setPosition(position);
+        distanceOverlay.setContent(content);
+    } else {
+        distanceOverlay = new kakao.maps.CustomOverlay({
+            map: map,
+            content: content,
+            position: position,
+            xAnchor: 0,
+            yAnchor: 0,
+            zIndex: 3  
+        });
+    }
+}
+
+// (EgID E107) 거리 표시용 커스텀 오버레이 삭제
+function deleteDistnce () {
+    if (distanceOverlay) {
+        distanceOverlay.setMap(null);
+        distanceOverlay = null;
+    }
+}
+
+// (EgID E103) 마우스 클릭 지점마다 표시되는 점(커스텀 오버레이)
+function displayCircleDot(position, distance) {
+    var circleOverlay = new kakao.maps.CustomOverlay({
+        content: '<span class="dot"></span>',
+        position: position,
+        zIndex: 1
+    });
+    circleOverlay.setMap(map);
+
+    if (distance > 0) {
+        var distanceOverlay = new kakao.maps.CustomOverlay({
+            content: '<div class="dotOverlay">거리 <span class="number">' + distance + '</span>m</div>',
+            position: position,
+            yAnchor: 1,
+            zIndex: 2
+        });
+        distanceOverlay.setMap(map);
+    }
+    dots.push({circle: circleOverlay, distance: distanceOverlay});
+}
+
+// (EgID E108) 클릭 지점 표시 오버레이 모두 제거
+function deleteCircleDot() {
+    for (var i = 0; i < dots.length; i++){
+        if (dots[i].circle) {
+            dots[i].circle.setMap(null);
+        }
+        if (dots[i].distance) {
+            dots[i].distance.setMap(null);
+        }
+    }
+    dots = [];
+}
+
+// (EgID E110) 총거리, 도보/자전거/바이크 예상시간을 커스텀오버레이 HTML로 생성
+function getTimeHTML(distance) {
+    var walkkTime = distance / 67 | 0;
+    var walkHour = '', walkMin = '';
+    if (walkkTime > 60) {
+        walkHour = '<span class="number">' + Math.floor(walkkTime / 60) + '</span>시간 ';
+    }
+    walkMin = '<span class="number">' + (walkkTime % 60) + '</span>분';
+
+    var bycicleTime = distance / 227 | 0;
+    var bycicleHour = '', bycicleMin = '';
+    if (bycicleTime > 60) {
+        bycicleHour = '<span class="number">' + Math.floor(bycicleTime / 60) + '</span>시간 ';
+    }
+    bycicleMin = '<span class="number">' + (bycicleTime % 60) + '</span>분';
+
+    // 바이크 가정: 분속 400m
+    var motorbikeTime = distance / 400 | 0;
+    var motoHour = '', motoMin = '';
+    if (motorbikeTime > 60) {
+        motoHour = '<span class="number">' + Math.floor(motorbikeTime / 60) + '</span>시간 ';
+    }
+    motoMin = '<span class="number">' + (motorbikeTime % 60) + '</span>분';
+
+    var content = '<ul class="dotOverlay distanceInfo">';
+    content += '    <li>';
+    content += '        <span class="label">총거리</span><span class="number">' + distance + '</span>m';
+    content += '    </li>';
+    content += '    <li>';
+    content += '        <span class="label">도보</span>' + walkHour + walkMin;
+    content += '    </li>';
+    content += '    <li>';
+    content += '        <span class="label">자전거</span>' + bycicleHour + bycicleMin;
+    content += '    </li>';
+    content += '    <li>';
+    content += '        <span class="label">바이크</span>' + motoHour + motoMin;
+    content += '    </li>';
+    content += '</ul>';
+    return content;
+}
+
+// (EgID E105) 지도 하단에 총거리/도보/자전거/바이크 시간 출력
+function updateRouteInfo(distance) {
+    var walkTime = distance / 67 | 0;    // 분
+    var bikeTime = distance / 227 | 0;   // 분
+    var motorTime = distance / 400 | 0;  // 분속 400m
+    var routeInfoDiv = document.getElementById('routeInfo');
+    if (!routeInfoDiv) return;
+
+    var html = '';
+    html += '<strong>총거리</strong>: ' + distance + 'm <br>';
+    html += '<strong>도보</strong>: ' + formatTime(walkTime) + '<br>';
+    html += '<strong>자전거</strong>: ' + formatTime(bikeTime) + '<br>';
+    html += '<strong>바이크</strong>: ' + formatTime(motorTime) + '<br>';
+
+    routeInfoDiv.innerHTML = html;
+}
+
+// (EgID E109) 분(minutes)을 '시, 분' 형태로 변환
+function formatTime(minutes) {
+    var hours = Math.floor(minutes / 60);
+    var mins = minutes % 60;
+    if (hours > 0)
+        return hours + '시간 ' + mins + '분';
+    else
+        return mins + '분';
+}
+
+// (EgID E100) 경로 저장: 쿠키에 저장
+function saveRoute() {
+    if (!clickLine) {
+        alert('그려진 경로가 없습니다.');
+        return;
+    }
+    var path = clickLine.getPath();
+    if (!path || path.length < 2) {
+        alert('그려진 경로가 없습니다.');
+        return;
+    }
+    var coords = [];
+    for (var i = 0; i < path.length; i++) {
+        coords.push({ lat: path[i].getLat(), lng: path[i].getLng() });
+    }
+    // 쿠키 저장
+    document.cookie = 'savedRoute=' + encodeURIComponent(JSON.stringify(coords)) + '; path=/;';
+    alert('경로가 쿠키에 저장되었습니다!');
+
+    // 하단 영역에 쿠키 데이터 출력
+    var cookieOutput = document.getElementById('cookieOutput');
+    cookieOutput.textContent = JSON.stringify(coords, null, 2);
+}
+
+// (EgID E101) 경로 불러오기: 쿠키가 존재할 때만 작동, 이후 지도 클릭 이벤트 막기
+function loadRoute() {
+    var cookieArr = document.cookie.split(';');
+    var savedValue = null;
+
+    for (var i = 0; i < cookieArr.length; i++) {
+        var c = cookieArr[i].trim();
+        if (c.indexOf('savedRoute=') === 0) {
+            savedValue = c.substring('savedRoute='.length, c.length);
+            break;
+        }
+    }
+
+    if (!savedValue) {
+        alert('저장된 경로가 없습니다.');
+        return;
+    }
+
+    var coords = JSON.parse(decodeURIComponent(savedValue));
+    if (!coords || coords.length < 2) {
+        alert('쿠키에 유효한 경로가 없습니다.');
+        return;
+    }
+
+    // 불러오기 전 기존 선/오버레이 완전 삭제 (깨끗한 상태)
+    deleteClickLine();
+    deleteDistnce();
+    deleteCircleDot();
+
+    // 새 폴리라인 생성
+    clickLine = new kakao.maps.Polyline({
+        map: map,
+        path: [],
+        strokeWeight: 3,
+        strokeColor: '#db4040',
+        strokeOpacity: 1,
+        strokeStyle: 'solid'
+    });
+
+    for (var i = 0; i < coords.length; i++) {
+        var latlng = new kakao.maps.LatLng(coords[i].lat, coords[i].lng);
+        var path = clickLine.getPath();
+        path.push(latlng);
+        clickLine.setPath(path);
+        var distance = Math.round(clickLine.getLength());
+        displayCircleDot(latlng, distance);
+    }
+
+    // 하단에 최종 거리/시간 표시
+    var finalDistance = Math.round(clickLine.getLength());
+    updateRouteInfo(finalDistance);
+
+    // 쿠키데이터 표시
+    var cookieOutput = document.getElementById('cookieOutput');
+    cookieOutput.textContent = JSON.stringify(coords, null, 2);
+
+    alert('저장된 경로를 불러왔습니다! 이제 지도 클릭이 비활성화됩니다.');
+    // 경로 불러온 뒤 클릭 비활성화
+    routeLoaded = true;
+}
+</script>
+</body>
+</html>
