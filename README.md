@@ -3,7 +3,7 @@ kakao map api에 대한 테스트 작성입니다.
 
 25.03.11.
 
-테스트 주소 : https://huiib.kr/p1/  또는  https://plemruckol.github.io/MapB/
+테스트 주소 : https://plemruckol.github.io/MapB/
 
 feat: 쿠키 기반 경로 저장/불러오기 및 지도 하단 거리·시간 표시 기능 추가
 
