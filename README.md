@@ -1,6 +1,6 @@
 # MapB
 kakao map api에 대한 테스트 작성입니다.
-
+vanilla js.
 25.03.11.
 
 테스트 주소 : https://plemruckol.github.io/MapB/
